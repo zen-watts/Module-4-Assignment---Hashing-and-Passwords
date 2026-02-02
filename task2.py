@@ -70,8 +70,8 @@ def worker_crack(
     end_idx: int,
     solved: "mp.managers.DictProxy",
     stop_event: "mp.Event",
-    progress_counter: mp.Value("Q", 0), # unsigned long long in case of large gitcounts
-    overall_start: float,
+    progress_counter: "mp.Value",
+    group_start: float,
 ) -> None:
     """
     Worker process: test a slice of the candidate list against all unsolved hashes.
@@ -94,7 +94,7 @@ def worker_crack(
             if bcrypt.checkpw(candidate, hash_bytes):
                 # Record the discovery with the parent process.
                 if username not in solved:
-                    elapsed = time.perf_counter() - overall_start
+                    elapsed = time.perf_counter() - group_start
                     solved[username] = (candidate.decode("utf-8"), elapsed)
 
         if local_checks >= 200:
@@ -112,7 +112,7 @@ def crack_cost_group(
     entries: list[ShadowEntry],
     candidates: list[bytes],
     workers: int,
-    overall_start: float,
+    group_start: float,
 ) -> dict[str, tuple[str, float]]:
     """
     Crack all hashes for a single bcrypt cost group using multiprocessing.
@@ -124,7 +124,7 @@ def crack_cost_group(
 
     manager = mp.Manager()
     solved = manager.dict()  # username -> (password, elapsed_seconds)
-    progress_counter = mp.Value("i", 0)
+    progress_counter = mp.Value("Q", 0)
     stop_event = mp.Event()
 
     # Prepare hash bytes once to avoid re-encoding.
@@ -152,20 +152,40 @@ def crack_cost_group(
                 solved,
                 stop_event,
                 progress_counter,
-                overall_start,
+                group_start,
             ),
         )
         processes.append(process)
         process.start()
+    
+    # Monitor progress with periodic reports.
+    ping_interval = 15.0
+    last_report_time = time.perf_counter()
+    last_report_checks = 0
 
     while True:
         if len(solved) >= len(entries):
             stop_event.set()
 
-        if stop_event.is_set() or progress_counter.value >= total_checks:
+        current_checks = progress_counter.value
+        if stop_event.is_set() or current_checks >= total_checks:
             break
 
-        time.sleep(0.1)
+        now = time.perf_counter()
+        if now - last_report_time >= ping_interval:
+            interval_checks = current_checks - last_report_checks
+            interval_time = now - last_report_time
+            checks_per_sec = interval_checks / interval_time if interval_time > 0 else 0.0
+            print(
+                f"Progress: checks={current_checks:>10,d} | "
+                f"rate={checks_per_sec:>8.1f} checks/sec | "
+                f"solved={len(solved)}/{len(entries)}",
+                flush=True,
+            )
+            last_report_time = now
+            last_report_checks = current_checks
+
+        time.sleep(0.2)
 
     stop_event.set()
 
@@ -211,23 +231,24 @@ def main() -> int:
     print(f"Candidate words: {len(candidates)}")
 
     groups = group_by_cost(entries)
-    overall_start = time.perf_counter()
-
+    
     # Keep results in original order for neat output.
     results: dict[str, tuple[str, float]] = {}
 
     for cost in sorted(groups.keys()):
         group_entries = groups[cost]
         print(f"\nCracking cost group {cost} with {len(group_entries)} hashes...")
+        group_start = time.perf_counter()
         group_results = crack_cost_group(
             cost,
             group_entries,
             candidates,
             args.workers,
-            overall_start,
+            group_start,
         )
         results.update(group_results)
 
+    print("Note: per-user crack time is measured from the start of that user's cost-group run.")
     print("\nResults:")
     for username, _hash_str in entries:
         if username in results:
