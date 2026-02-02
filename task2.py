@@ -123,7 +123,7 @@ def crack_cost_group(
     total_checks = total_candidates * len(entries)
 
     manager = mp.Manager()
-    solved = manager.dict()  # username -> (password, elapsed_seconds)
+    solved = manager.dict()  # username to (password, elapsed_seconds)
     progress_counter = mp.Value("Q", 0)
     stop_event = mp.Event()
 
@@ -136,7 +136,7 @@ def crack_cost_group(
     chunk_size = math.ceil(total_candidates / workers)
 
     processes: list[mp.Process] = []
-    for worker_id in range(workers):
+    for worker_id in range(workers): # launch each worker process
         start_idx = worker_id * chunk_size
         end_idx = min(start_idx + chunk_size, total_candidates)
         if start_idx >= end_idx:
@@ -231,7 +231,7 @@ def main() -> int:
     print(f"Candidate words: {len(candidates)}")
 
     groups = group_by_cost(entries)
-    
+
     # Keep results in original order for neat output.
     results: dict[str, tuple[str, float]] = {}
 
@@ -239,7 +239,7 @@ def main() -> int:
         group_entries = groups[cost]
         print(f"\nCracking cost group {cost} with {len(group_entries)} hashes...")
         group_start = time.perf_counter()
-        group_results = crack_cost_group(
+        group_results = crack_cost_group( # begin cracking for this cost group
             cost,
             group_entries,
             candidates,

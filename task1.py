@@ -20,19 +20,19 @@ from common import (
     sha256_hex,
     truncated_sha256_int,
 )
+# ---------------------------------------------------------------------------
+# Avalanche experiment: flip 1 input bit and observe output diffusion
+# ---------------------------------------------------------------------------
 
 AVALANCHE_COUNT = 3
 AVALANCHE_LENGTH = 16
-SWEEP_MIN_BITS = 8
-SWEEP_MAX_BITS = 50
-SWEEP_STEP = 2
 
 
 def run_avalanche() -> None:
     """Generate message pairs that differ by one bit, then hash them."""
     for i in range(AVALANCHE_COUNT):
-        original = random_bytes(AVALANCHE_LENGTH)
-        mutated, bit_index = flip_one_bit(original)
+        original = random_bytes(AVALANCHE_LENGTH) # function found in common.py
+        mutated, bit_index = flip_one_bit(original) # function found in common.py
 
         # Verify the Hamming distance is exactly 1 bit.
         distance = hamming_distance_bits(original, mutated)
@@ -46,6 +46,14 @@ def run_avalanche() -> None:
         print(f"Input B: {describe_bytes(mutated)}")
         print(f"Digest A: {digest_a}")
         print(f"Digest B: {digest_b}")
+
+# ---------------------------------------------------------------------------
+# Collision experiment: truncated SHA-256 birthday collisions + sweep 8..50
+# ---------------------------------------------------------------------------
+
+SWEEP_MIN_BITS = 8
+SWEEP_MAX_BITS = 50
+SWEEP_STEP = 2
 
 
 def _message_from_counter(counter: int, salt: bytes) -> bytes:
@@ -109,7 +117,7 @@ def run_sweep() -> None:
 
 def main() -> int:
     run_avalanche()
-    print()
+    print() # blank line
     run_sweep()
     return 0
 

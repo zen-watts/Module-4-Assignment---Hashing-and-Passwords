@@ -51,8 +51,6 @@ def flip_one_bit(data: bytes, bit_index: Optional[int] = None) -> tuple[bytes, i
     total_bits = len(data) * 8
     if bit_index is None:
         bit_index = secrets.randbelow(total_bits)
-    if bit_index < 0 or bit_index >= total_bits:
-        raise ValueError("bit_index is out of range")
 
     byte_index = bit_index // 8
     bit_in_byte = 7 - (bit_index % 8)
