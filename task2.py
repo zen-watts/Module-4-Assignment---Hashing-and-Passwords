@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Task 2: bcrypt dictionary cracker for a shadow-style file.
 
@@ -6,32 +5,22 @@ Dependencies (install once):
   pip install bcrypt nltk
   python -m nltk.downloader words
 """
-
-from __future__ import annotations
-
 import argparse
 import math
 import multiprocessing as mp
-import queue
 import sys
 import time
-from typing import Dict, List, Set, Tuple
-
-try:
-    import bcrypt
-except ImportError as exc:  # pragma: no cover - runtime guard
-    raise SystemExit("Missing dependency: bcrypt. Install with `pip install bcrypt`.") from exc
-
+import bcrypt
 from common import format_seconds
 
 
-ShadowEntry = Tuple[str, str]
-HashEntry = Tuple[str, bytes]
+ShadowEntry = tuple[str, str]
+HashEntry = tuple[str, bytes]
 
 
-def load_shadow_entries(path: str) -> List[ShadowEntry]:
+def load_shadow_entries(path: str) -> list[ShadowEntry]:
     """Read shadow-style lines of the form Username:<bcrypt-hash>."""
-    entries: List[ShadowEntry] = []
+    entries: list[ShadowEntry] = []
     with open(path, "r", encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
@@ -52,56 +41,22 @@ def bcrypt_cost(hash_str: str) -> int:
     return int(parts[2])
 
 
-def ensure_nltk_words() -> None:
-    """
-    Ensure the NLTK words corpus is available.
-
-    If it is missing, try to download it; otherwise, print instructions.
-    """
-    try:
-        import nltk
-        nltk.data.find("corpora/words")
-    except LookupError:
-        print("NLTK words corpus not found. Attempting download...")
-        try:
-            import nltk
-            nltk.download("words", quiet=True)
-            nltk.data.find("corpora/words")
-        except Exception:
-            raise SystemExit(
-                "NLTK words corpus is missing. Run: python -m nltk.downloader words"
-            )
-    except ImportError as exc:
-        raise SystemExit("Missing dependency: nltk. Install with `pip install nltk`.") from exc
-
-
-def build_candidate_list(min_len: int, max_len: int) -> List[bytes]:
-    """
-    Build the candidate list from the NLTK words corpus.
-
-    Only single-word, alphabetic entries of length min_len..max_len are kept.
-    """
-    ensure_nltk_words()
+def build_candidate_list() -> list[bytes]:
+    import nltk
     from nltk.corpus import words
+    try:
+        ws = words.words()
+    except LookupError:
+        nltk.download("words", quiet=True)
+        ws = words.words()
 
-    candidates: List[bytes] = []
-    seen: Set[str] = set()
-
-    for word in words.words():
-        word = word.strip()
-        if not word.isalpha():
-            continue
-        word = word.lower()
-        if min_len <= len(word) <= max_len and word not in seen:
-            seen.add(word)
-            candidates.append(word.encode("utf-8"))
-
-    return candidates
+    cand = {s.lower() for s in ws if s.isalpha() and 6 <= len(s) <= 10}
+    return [w.encode("utf-8") for w in sorted(cand)] # we sort for consistency
 
 
-def group_by_cost(entries: List[ShadowEntry]) -> Dict[int, List[ShadowEntry]]:
+def group_by_cost(entries: list[ShadowEntry]) -> dict[int, list[ShadowEntry]]:
     """Group shadow entries by bcrypt cost (work factor)."""
-    groups: Dict[int, List[ShadowEntry]] = {}
+    groups: dict[int, list[ShadowEntry]] = {}
     for username, hash_str in entries:
         cost = bcrypt_cost(hash_str)
         groups.setdefault(cost, []).append((username, hash_str))
@@ -109,14 +64,13 @@ def group_by_cost(entries: List[ShadowEntry]) -> Dict[int, List[ShadowEntry]]:
 
 
 def worker_crack(
-    hashes: List[HashEntry],
-    candidates: List[bytes],
+    hashes: list[HashEntry],
+    candidates: list[bytes],
     start_idx: int,
     end_idx: int,
     solved: "mp.managers.DictProxy",
-    result_queue: "mp.Queue",
     stop_event: "mp.Event",
-    progress_counter: "mp.Value",
+    progress_counter: mp.Value("Q", 0), # unsigned long long in case of large gitcounts
     overall_start: float,
 ) -> None:
     """
@@ -142,7 +96,6 @@ def worker_crack(
                 if username not in solved:
                     elapsed = time.perf_counter() - overall_start
                     solved[username] = (candidate.decode("utf-8"), elapsed)
-                    result_queue.put((username, candidate.decode("utf-8"), elapsed))
 
         if local_checks >= 200:
             with progress_counter.get_lock():
@@ -156,12 +109,11 @@ def worker_crack(
 
 def crack_cost_group(
     cost: int,
-    entries: List[ShadowEntry],
-    candidates: List[bytes],
+    entries: list[ShadowEntry],
+    candidates: list[bytes],
     workers: int,
     overall_start: float,
-    progress_interval: float,
-) -> Dict[str, Tuple[str, float]]:
+) -> dict[str, tuple[str, float]]:
     """
     Crack all hashes for a single bcrypt cost group using multiprocessing.
     """
@@ -174,17 +126,16 @@ def crack_cost_group(
     solved = manager.dict()  # username -> (password, elapsed_seconds)
     progress_counter = mp.Value("i", 0)
     stop_event = mp.Event()
-    result_queue: mp.Queue = mp.Queue()
 
     # Prepare hash bytes once to avoid re-encoding.
-    hash_entries: List[HashEntry] = [
+    hash_entries: list[HashEntry] = [
         (username, hash_str.encode("utf-8")) for username, hash_str in entries
     ]
 
     workers = max(1, min(workers, total_candidates))
     chunk_size = math.ceil(total_candidates / workers)
 
-    processes: List[mp.Process] = []
+    processes: list[mp.Process] = []
     for worker_id in range(workers):
         start_idx = worker_id * chunk_size
         end_idx = min(start_idx + chunk_size, total_candidates)
@@ -199,7 +150,6 @@ def crack_cost_group(
                 start_idx,
                 end_idx,
                 solved,
-                result_queue,
                 stop_event,
                 progress_counter,
                 overall_start,
@@ -208,32 +158,9 @@ def crack_cost_group(
         processes.append(process)
         process.start()
 
-    last_time = time.perf_counter()
-    last_count = 0
-
     while True:
-        # Drain results without blocking, so progress stays responsive.
-        while True:
-            try:
-                result_queue.get_nowait()
-            except queue.Empty:
-                break
-
         if len(solved) >= len(entries):
             stop_event.set()
-
-        now = time.perf_counter()
-        if now - last_time >= progress_interval:
-            tested = progress_counter.value
-            rate = (tested - last_count) / (now - last_time) if now > last_time else 0.0
-            remaining = max(0, total_checks - tested)
-            eta = remaining / rate if rate > 0 else float("inf")
-            print(
-                f"[cost {cost}] tested {tested}/{total_checks} checks, "
-                f"{rate:.1f} checks/sec, ETA {eta:.1f}s"
-            )
-            last_time = now
-            last_count = tested
 
         if stop_event.is_set() or progress_counter.value >= total_checks:
             break
@@ -261,29 +188,11 @@ def parse_args() -> argparse.Namespace:
         help="Path to the shadow-style file (default: shadow.txt)",
     )
     parser.add_argument(
-        "--min-len",
-        type=int,
-        default=6,
-        help="Minimum candidate length (default: 6)",
-    )
-    parser.add_argument(
-        "--max-len",
-        type=int,
-        default=10,
-        help="Maximum candidate length (default: 10)",
-    )
-    parser.add_argument(
         "-w",
         "--workers",
         type=int,
-        default=mp.cpu_count(),
+        default=max(1, mp.cpu_count() - 1),
         help="Number of worker processes (default: CPU count)",
-    )
-    parser.add_argument(
-        "--progress-interval",
-        type=float,
-        default=1.0,
-        help="Seconds between progress updates (default: 1.0)",
     )
     return parser.parse_args()
 
@@ -298,14 +207,14 @@ def main() -> int:
 
     print(f"Loaded {len(entries)} shadow entries.")
     print("Building candidate list from NLTK words corpus...")
-    candidates = build_candidate_list(args.min_len, args.max_len)
+    candidates = build_candidate_list()
     print(f"Candidate words: {len(candidates)}")
 
     groups = group_by_cost(entries)
     overall_start = time.perf_counter()
 
     # Keep results in original order for neat output.
-    results: Dict[str, Tuple[str, float]] = {}
+    results: dict[str, tuple[str, float]] = {}
 
     for cost in sorted(groups.keys()):
         group_entries = groups[cost]
@@ -316,7 +225,6 @@ def main() -> int:
             candidates,
             args.workers,
             overall_start,
-            args.progress_interval,
         )
         results.update(group_results)
 
@@ -332,5 +240,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    # Multiprocessing guard for Windows/macOS spawn behavior.
+    # Multiprocessing guard
     sys.exit(main())

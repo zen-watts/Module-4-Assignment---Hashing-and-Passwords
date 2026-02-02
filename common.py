@@ -4,12 +4,9 @@ Common helpers shared by task1.py and task2.py.
 Keep this file small and focused so both tasks can import utilities without
 copying code.
 """
-
-from __future__ import annotations
-
 import hashlib
 import secrets
-from typing import Optional, Tuple
+from typing import Optional
 
 
 def sha256_digest(data: bytes) -> bytes:
@@ -40,7 +37,7 @@ def truncated_sha256_int(data: bytes, bits: int) -> int:
     return truncate_digest_bits(sha256_digest(data), bits)
 
 
-def flip_one_bit(data: bytes, bit_index: Optional[int] = None) -> Tuple[bytes, int]:
+def flip_one_bit(data: bytes, bit_index: Optional[int] = None) -> tuple[bytes, int]:
     """
     Return a copy of `data` with exactly one bit flipped.
 
@@ -95,4 +92,4 @@ def describe_bytes(data: bytes, max_len: int = 32) -> str:
 
 def format_seconds(seconds: float) -> str:
     """Format a duration in seconds with millisecond precision."""
-    return f"{seconds:.3f}s"
+    return f"{seconds:.6f}s"
